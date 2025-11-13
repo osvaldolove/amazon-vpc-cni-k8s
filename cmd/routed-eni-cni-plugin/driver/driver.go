@@ -539,16 +539,18 @@ func (n *linuxNetwork) setupIPBasedContainerRouteRules(hostVeth netlink.Link, co
 
 	log.Debugf("Successfully setup toContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), "main")
 
-	if rtTable != unix.RT_TABLE_MAIN {
-		fromContainerRule := n.netLink.NewRule()
-		fromContainerRule.Src = containerAddr
-		fromContainerRule.Priority = networkutils.FromPodRulePriority
-		fromContainerRule.Table = rtTable
-		if err := n.netLink.RuleAdd(fromContainerRule); err != nil && !networkutils.IsRuleExistsError(err) {
-			return errors.Wrapf(err, "failed to setup fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
-		}
-		log.Debugf("Successfully setup fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
+	// Setup fromContainer rule for all routing tables
+	// Previous code skipped this for RT_TABLE_MAIN (254), but that breaks
+	// primary ENI pods in secondary IP mode. Prefix delegation mode can
+	// safely handle duplicate rule attempts (IsRuleExistsError is checked).
+	fromContainerRule := n.netLink.NewRule()
+	fromContainerRule.Src = containerAddr
+	fromContainerRule.Priority = networkutils.FromPodRulePriority
+	fromContainerRule.Table = rtTable
+	if err := n.netLink.RuleAdd(fromContainerRule); err != nil && !networkutils.IsRuleExistsError(err) {
+		return errors.Wrapf(err, "failed to setup fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
 	}
+	log.Debugf("Successfully setup fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
 
 	return nil
 }
@@ -563,18 +565,19 @@ func (n *linuxNetwork) teardownIPBasedContainerRouteRules(containerAddr *net.IPN
 	}
 	log.Debugf("Successfully deleted toContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), "main")
 
-	if rtTable != unix.RT_TABLE_MAIN {
-		fromContainerRule := netlink.NewRule()
-		fromContainerRule.Src = containerAddr
-		fromContainerRule.Priority = networkutils.FromPodRulePriority
-		fromContainerRule.Table = rtTable
+	// Delete fromContainer rule for all routing tables
+	// Previous code skipped this for RT_TABLE_MAIN (254), but that causes
+	// orphaned rules for primary ENI pods in secondary IP mode.
+	fromContainerRule := netlink.NewRule()
+	fromContainerRule.Src = containerAddr
+	fromContainerRule.Priority = networkutils.FromPodRulePriority
+	fromContainerRule.Table = rtTable
 
-		// note: older version CNI sets up multiple CIDR based from container rule, so we recursively delete them to be backwards-compatible.
-		if err := networkutils.NetLinkRuleDelAll(n.netLink, fromContainerRule); err != nil {
-			return errors.Wrapf(err, "failed to delete fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
-		}
-		log.Debugf("Successfully deleted fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
+	// note: older version CNI sets up multiple CIDR based from container rule, so we recursively delete them to be backwards-compatible.
+	if err := networkutils.NetLinkRuleDelAll(n.netLink, fromContainerRule); err != nil {
+		return errors.Wrapf(err, "failed to delete fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
 	}
+	log.Debugf("Successfully deleted fromContainer rule, containerAddr=%s, rtTable=%v", containerAddr.String(), rtTable)
 
 	route := netlink.Route{
 		Scope: netlink.SCOPE_LINK,
