@@ -2,8 +2,6 @@ package networkutils
 
 import (
 	"net"
-
-	"golang.org/x/sys/unix"
 )
 
 // BaseNumber is the base offset for multi-NIC route table IDs.
@@ -16,11 +14,26 @@ func CalculateOldRouteTableId(deviceNumber int, networkCardIndex int, maxENIsPer
 }
 
 func CalculateRouteTableId(deviceNumber int, networkCardIndex int) int {
-	if networkCardIndex == 0 && deviceNumber == 0 {
-		return unix.RT_TABLE_MAIN
-	} else if networkCardIndex == 0 {
+	// Note: This function calculates routing table IDs for pod IP routing rules.
+	// The primary ENI (deviceNumber 0) previously used RT_TABLE_MAIN (254), which
+	// caused issues because the main table's routes include "src" parameters that
+	// override the source IP for outgoing packets. This breaks connectivity for
+	// pods using secondary IPs on the primary ENI.
+	//
+	// By assigning routing table 1 to the primary ENI (like we do for other ENIs),
+	// we ensure proper source-based routing for all pod IPs.
+	//
+	// IMPORTANT: This does NOT affect the node's own networking. The node's primary
+	// IP continues to use RT_TABLE_MAIN through normal Linux routing, since these
+	// routing table IDs are only used for pod IP policy routing rules.
+	if networkCardIndex == 0 {
+		// Primary network card: assign table numbers starting from 1
+		// deviceNumber 0 (primary ENI) -> table 1
+		// deviceNumber 1 (secondary ENI) -> table 2
+		// deviceNumber 2 (tertiary ENI) -> table 3, etc.
 		return deviceNumber + 1
 	} else {
+		// Secondary network cards: use offset-based numbering
 		return BaseNumber + deviceNumber + (100 * networkCardIndex)
 	}
 }

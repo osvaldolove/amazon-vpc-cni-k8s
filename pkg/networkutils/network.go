@@ -1033,8 +1033,12 @@ func (n *linuxNetwork) SetupENINetwork(eniIP string, eniMAC string, networkCard 
 func setupENINetwork(eniIP string, eniMac string, networkCard int, eniSubnetCIDR string, netLink netlinkwrapper.NetLink,
 	retryLinkByMacInterval time.Duration, retryRouteAddInterval time.Duration, mtu int, maxENIPerNIC int, isTrunkENI bool, routeTableID int, isRuleConfigured bool) error {
 
-	// routeTableID should only be unix.RT_TABLE_MAIN for primary ENI and should never be passed to this function
-	if routeTableID == unix.RT_TABLE_MAIN {
+	// setupENINetwork should never be called on the primary ENI (deviceNumber 0).
+	// With the fix for primary ENI secondary IP routing, the primary ENI now uses
+	// routing table 1 (not RT_TABLE_MAIN/254), but this function should still not
+	// be called for it since the primary ENI is already configured by the OS.
+	// We check for table 1 as an additional safety check.
+	if routeTableID == 1 {
 		return errors.New("setupENINetwork should never be called on the primary ENI")
 	}
 
