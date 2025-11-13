@@ -410,8 +410,22 @@ func (n *linuxNetwork) setupPrimaryENIRoutingTable(primaryLink netlink.Link, v6E
 		return errors.New("no addresses found on primary ENI")
 	}
 
-	// Use the first address to determine gateway
-	eniSubnetIPNet := addrs[0].IPNet
+	// Find the primary IP (the one with a CIDR subnet, not /32)
+	// Secondary pod IPs are added as /32, the primary node IP has the actual subnet mask
+	var eniSubnetIPNet *net.IPNet
+	for _, addr := range addrs {
+		ones, bits := addr.IPNet.Mask.Size()
+		// Primary IP will have a mask smaller than /32 (e.g., /26, /24)
+		if ones < bits {
+			eniSubnetIPNet = addr.IPNet
+			break
+		}
+	}
+
+	if eniSubnetIPNet == nil {
+		return errors.New("failed to find primary IP address with subnet mask on primary ENI")
+	}
+
 	gw := GetIPv4Gateway(eniSubnetIPNet)
 	if v6Enabled {
 		gw = GetIPv6Gateway()
