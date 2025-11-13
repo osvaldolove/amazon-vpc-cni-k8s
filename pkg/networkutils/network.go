@@ -374,7 +374,88 @@ func (n *linuxNetwork) SetupHostNetwork(vpcCIDRs []string, primaryMAC string, pr
 		}
 	}
 
+	// Setup routing table 1 for primary ENI secondary IPs (pod IPs)
+	// This table is used by pods on the primary ENI to avoid RT_TABLE_MAIN's 'src' parameter
+	// which would override pod source IPs with the node's primary IP
+	if err := n.setupPrimaryENIRoutingTable(link, v6Enabled); err != nil {
+		return errors.Wrapf(err, "failed to setup routing table 1 for primary ENI")
+	}
+
 	return n.updateHostIptablesRules(vpcCIDRs, primaryMAC, primaryAddr, v6Enabled)
+}
+
+// setupPrimaryENIRoutingTable creates routing table 1 for primary ENI secondary IPs (pod IPs).
+// Table 1 is used by pods on the primary ENI to avoid RT_TABLE_MAIN's 'src' parameter which
+// would override pod source IPs with the node's primary IP.
+func (n *linuxNetwork) setupPrimaryENIRoutingTable(primaryLink netlink.Link, v6Enabled bool) error {
+	const primaryENITable = 1
+
+	// Get the gateway and network info from the primary ENI
+	family := unix.AF_INET
+	mask := 32
+	zeroAddr := net.IPv4zero
+	if v6Enabled {
+		family = unix.AF_INET6
+		mask = 128
+		zeroAddr = net.IPv6zero
+	}
+
+	// Get primary ENI's subnet to determine gateway
+	addrs, err := n.netLink.AddrList(primaryLink, family)
+	if err != nil {
+		return errors.Wrap(err, "failed to list primary ENI addresses")
+	}
+
+	if len(addrs) == 0 {
+		return errors.New("no addresses found on primary ENI")
+	}
+
+	// Use the first address to determine gateway
+	eniSubnetIPNet := addrs[0].IPNet
+	gw := GetIPv4Gateway(eniSubnetIPNet)
+	if v6Enabled {
+		gw = GetIPv6Gateway()
+	}
+
+	linkIndex := primaryLink.Attrs().Index
+
+	log.Infof("Setting up routing table %d for primary ENI with gateway %v", primaryENITable, gw)
+
+	// Create routes in table 1 (same structure as secondary ENI tables, but without 'src' parameters)
+	routes := []netlink.Route{
+		// Add a direct link route for the gateway
+		{
+			LinkIndex: linkIndex,
+			Dst:       &net.IPNet{IP: gw, Mask: net.CIDRMask(mask, mask)},
+			Scope:     netlink.SCOPE_LINK,
+			Table:     primaryENITable,
+		},
+		// Route all other traffic via the gateway
+		{
+			LinkIndex: linkIndex,
+			Dst:       &net.IPNet{IP: zeroAddr, Mask: net.CIDRMask(0, mask)},
+			Scope:     netlink.SCOPE_UNIVERSE,
+			Gw:        gw,
+			Table:     primaryENITable,
+		},
+	}
+
+	for _, r := range routes {
+		// Delete existing route if present
+		err := n.netLink.RouteDel(&r)
+		if err != nil && !netlinkwrapper.IsNotExistsError(err) {
+			log.Debugf("Failed to delete existing route in table %d: %v", primaryENITable, err)
+		}
+
+		// Add the route
+		if err := n.netLink.RouteReplace(&r); err != nil {
+			return errors.Wrapf(err, "failed to add route %s via %s to table %d",
+				r.Dst.IP.String(), gw.String(), primaryENITable)
+		}
+		log.Debugf("Successfully added route %s via %s to table %d", r.Dst.IP.String(), gw.String(), primaryENITable)
+	}
+
+	return nil
 }
 
 // UpdateHostIptablesRules updates the NAT table rules based on the VPC CIDRs configuration
