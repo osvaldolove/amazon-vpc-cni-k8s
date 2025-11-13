@@ -278,10 +278,10 @@ func (n *linuxNetwork) SetupPodNetwork(vethMetadata []VirtualInterfaceMetadata, 
 			return errors.Wrapf(err, "SetupPodNetwork: failed to setup veth pair")
 		}
 
-		rtTable := unix.RT_TABLE_MAIN
-		if vethData.RouteTable > 1 {
-			rtTable = vethData.RouteTable
-		}
+		// Use the routing table assigned by ipamd directly.
+		// With the fix for primary ENI routing, all ENIs (including primary) get
+		// dedicated routing tables (1, 2, 3, etc.) instead of RT_TABLE_MAIN.
+		rtTable := vethData.RouteTable
 
 		if err := n.setupIPBasedContainerRouteRules(hostVeth, vethData.IPAddress, rtTable, log); err != nil {
 			return errors.Wrapf(err, "SetupPodNetwork: unable to setup IP based container routes and rules")
@@ -297,12 +297,10 @@ func (n *linuxNetwork) TeardownPodNetwork(vethMetadata []VirtualInterfaceMetadat
 
 		log.Debugf("TeardownPodNetwork: containerAddr=%s, routeTable=%d", vethData.IPAddress.String(), vethData.RouteTable)
 
-		// Route table ID for primary ENI was previously calculated as (Network 0, Device 0) => (0* MaxENI + 0 + 1)
-		// which is why we only take action if the route table is not 1
-		rtTable := unix.RT_TABLE_MAIN
-		if vethData.RouteTable != 1 {
-			rtTable = vethData.RouteTable
-		}
+		// Use the routing table assigned by ipamd directly.
+		// With the fix for primary ENI routing, all ENIs (including primary) get
+		// dedicated routing tables (1, 2, 3, etc.) instead of RT_TABLE_MAIN.
+		rtTable := vethData.RouteTable
 
 		if err := n.teardownIPBasedContainerRouteRules(vethData.IPAddress, rtTable, log); err != nil {
 			return errors.Wrapf(err, "TeardownPodNetwork: unable to teardown IP based container routes and rules")
