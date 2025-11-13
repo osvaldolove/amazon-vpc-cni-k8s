@@ -426,7 +426,14 @@ func (n *linuxNetwork) setupPrimaryENIRoutingTable(primaryLink netlink.Link, v6E
 		return errors.New("failed to find primary IP address with subnet mask on primary ENI")
 	}
 
-	gw := GetIPv4Gateway(eniSubnetIPNet)
+	// GetIPv4Gateway expects the network address, not the host IP
+	// Extract the network address from the IPNet
+	networkAddr := &net.IPNet{
+		IP:   eniSubnetIPNet.IP.Mask(eniSubnetIPNet.Mask),
+		Mask: eniSubnetIPNet.Mask,
+	}
+
+	gw := GetIPv4Gateway(networkAddr)
 	if v6Enabled {
 		gw = GetIPv6Gateway()
 	}
